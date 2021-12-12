@@ -229,14 +229,14 @@ if [ ! "$STDIN_FILE" = "" ]; then
   touch "$STDIN_FILE" || exit 1
 fi
 
-if [ "$AFL_PATH" = "" ]; then
+if [ "$HF_PATH" = "" ]; then
   SHOWMAP="${0%/afl-cmin}/afl-showmap"
 else
-  SHOWMAP="$AFL_PATH/afl-showmap"
+  SHOWMAP="$HF_PATH/afl-showmap"
 fi
 
 if [ ! -x "$SHOWMAP" ]; then
-  echo "[-] Error: can't find 'afl-showmap' - please set AFL_PATH." 1>&2
+  echo "[-] Error: can't find 'afl-showmap' - please set HF_PATH." 1>&2
   rm -rf "$TRACE_DIR"
   exit 1
 fi

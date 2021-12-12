@@ -29,6 +29,8 @@
 #include "../android-ashmem.h"
 #include "../config.h"
 #include "../types.h"
+#include "../hash.h"
+#include "../hashset.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +54,8 @@
 #  define CONST_PRIO 0
 #endif /* ^USE_TRACE_PC */
 
+static FILE* filefd = NULL;
+
 
 /* Globals needed by the injected instrumentation. The __afl_area_initial region
    is used for instrumentation output before __afl_map_shm() has a chance to run.
@@ -59,6 +63,10 @@
 
 u8  __afl_area_initial[MAP_SIZE];
 u8* __afl_area_ptr = __afl_area_initial;
+
+// HorseFuzz: map for function IDs
+u32  __afl_funcids_initial[MAP_SIZE];
+u32* __afl_funcids_ptr = __afl_funcids_initial;
 
 __thread u32 __afl_prev_loc;
 
@@ -92,6 +100,9 @@ static void __afl_map_shm(void) {
        our parent doesn't give up on us. */
 
     __afl_area_ptr[0] = 1;
+
+    // HorseFuzz
+    __afl_funcids_ptr = (u32*)&__afl_area_ptr[MAP_SIZE];
 
   }
 
@@ -144,7 +155,7 @@ static void __afl_start_forkserver(void) {
         close(FORKSRV_FD);
         close(FORKSRV_FD + 1);
         return;
-  
+
       }
 
     } else {
@@ -309,6 +320,216 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t* start, uint32_t* stop) {
 
     start++;
 
+  }
+
+}
+
+//----------------------------------------------------------
+// HorseFuze: hashset library
+// TRUNG: temporarily copy the Hashset library here.
+// Not sure why when putting it into a separate file,
+// horsefuzz-clang-fast will fail to run
+
+static const unsigned int prime_1 = 73;
+static const unsigned int prime_2 = 5009;
+
+hashset_t hashset_create()
+{
+  hashset_t set = (hashset_t) calloc(1, sizeof(struct hashset_st));
+
+  if (set == NULL) {
+    return NULL;
+  }
+  set->nbits = 3;
+  set->capacity = (size_t)(1 << set->nbits);
+  set->mask = set->capacity - 1;
+  set->items = (unsigned long*) calloc(set->capacity, sizeof(size_t));
+  if (set->items == NULL) {
+    hashset_destroy(set);
+    return NULL;
+  }
+  set->nitems = 0;
+  set->n_deleted_items = 0;
+  return set;
+}
+
+size_t hashset_num_items(hashset_t set)
+{
+  return set->nitems;
+}
+
+void hashset_destroy(hashset_t set)
+{
+  if (set) {
+    free(set->items);
+  }
+  free(set);
+}
+
+static int hashset_add_member(hashset_t set, void *item)
+{
+  size_t value = (size_t)item;
+  size_t ii;
+
+  if (value == 0 || value == 1) {
+    return -1;
+  }
+
+  ii = set->mask & (prime_1 * value);
+
+  while (set->items[ii] != 0 && set->items[ii] != 1) {
+    if (set->items[ii] == value) {
+      return 0;
+    } else {
+      /* search free slot */
+      ii = set->mask & (ii + prime_2);
+    }
+  }
+  set->nitems++;
+  if (set->items[ii] == 1) {
+    set->n_deleted_items--;
+  }
+  set->items[ii] = value;
+  return 1;
+}
+
+static void maybe_rehash(hashset_t set)
+{
+  size_t *old_items;
+  size_t old_capacity, ii;
+
+
+  if (set->nitems + set->n_deleted_items >= (double)set->capacity * 0.85) {
+    old_items = set->items;
+    old_capacity = set->capacity;
+    set->nbits++;
+    set->capacity = (size_t)(1 << set->nbits);
+    set->mask = set->capacity - 1;
+    set->items = (unsigned long*) calloc(set->capacity, sizeof(size_t));
+    set->nitems = 0;
+    set->n_deleted_items = 0;
+    assert(set->items);
+    for (ii = 0; ii < old_capacity; ii++) {
+      hashset_add_member(set, (void *)old_items[ii]);
+    }
+    free(old_items);
+  }
+}
+
+int hashset_add(hashset_t set, void *item)
+{
+  int rv = hashset_add_member(set, item);
+  maybe_rehash(set);
+  return rv;
+}
+
+int hashset_remove(hashset_t set, void *item)
+{
+  size_t value = (size_t)item;
+  size_t ii = set->mask & (prime_1 * value);
+
+  while (set->items[ii] != 0) {
+    if (set->items[ii] == value) {
+      set->items[ii] = 1;
+      set->nitems--;
+      set->n_deleted_items++;
+      return 1;
+    } else {
+      ii = set->mask & (ii + prime_2);
+    }
+  }
+  return 0;
+}
+
+int hashset_is_member(hashset_t set, void *item)
+{
+  size_t value = (size_t)item;
+  size_t ii = set->mask & (prime_1 * value);
+
+  while (set->items[ii] != 0) {
+    if (set->items[ii] == value) {
+        return 1;
+    } else {
+        ii = set->mask & (ii + prime_2);
+    }
+  }
+  return 0;
+}
+
+//----------------------------------------------------------
+
+
+// HorseFuzz: profiling function to print out functions info
+void llvm_profiling_mapidx(int mapidx, const char* fname, int fid)
+  __attribute__((visibility("default")));
+
+void llvm_profiling_mapidx(int mapidx, const char* fname, int fid) {
+  char* binary = getenv("HF_BINARY");
+  char* fn_map_ids = malloc(1000);
+  sprintf(fn_map_ids, "/tmp/%s/map_indexes.log", binary);
+  filefd = fopen(fn_map_ids, "a+");
+  if (filefd != NULL) {
+    fprintf(filefd, "Index %d: Function (%s,%u)\n", mapidx, fname, fid);
+    fflush(filefd);
+    fclose(filefd);
+  }
+}
+
+// HorseFuzz: profiling covered functions
+hashset_t fcall_set = NULL;
+
+void llvm_profiling_fcov(const char* caller, const char* callee)
+  __attribute__((visibility("default")));
+
+void llvm_profiling_fcov(const char* caller, const char* callee) {
+  char* fcall_info = malloc(strlen(caller) + strlen(callee) + 5);
+  strcpy(fcall_info, caller);
+  strcat(fcall_info, "->");
+  strcat(fcall_info, callee);
+
+  size_t cksum = (size_t) hash32(fcall_info, strlen(fcall_info), 0xa5b35705);
+
+  if (fcall_set == NULL)
+    fcall_set = hashset_create();
+
+  if(!hashset_is_member(fcall_set, cksum)) {
+    hashset_add(fcall_set, (void*) cksum);
+
+    char* binary = getenv("HF_BINARY");
+    char* fn_cov_funcs = malloc(1000);
+    sprintf(fn_cov_funcs, "/tmp/%s/covered_functions.log", binary);
+    filefd = fopen(fn_cov_funcs, "a+");
+
+    if (filefd != NULL) {
+      fprintf(filefd, "Function: %s->%s\n", caller, callee);
+      fflush(filefd);
+      fclose(filefd);
+    }
+    free(fn_cov_funcs);
+  }
+
+  free(fcall_info);
+}
+
+
+void llvm_profiling_finish()
+  __attribute__((visibility("default")));
+
+void llvm_profiling_finish() {
+  if (fcall_set != NULL) {
+    hashset_destroy(fcall_set);
+    fcall_set = NULL;
+
+    // char* binary = getenv("HF_BINARY");
+    // char* fn_cov_funcs = malloc(1000);
+    // sprintf(fn_cov_funcs, "/tmp/%s/covered_functions.log", binary);
+    // filefd = fopen(fn_cov_funcs, "a+");
+
+    // if (filefd != NULL) {
+    //   fprintf(filefd, "== Finish\n");
+    //   fflush(filefd);
+    //   fclose(filefd);
+    // }
   }
 
 }

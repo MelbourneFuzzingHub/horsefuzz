@@ -179,7 +179,7 @@ static void setup_shm(void) {
   ck_free(shm_str);
 
   trace_bits = shmat(shm_id, NULL, 0);
-  
+
   if (trace_bits == (void *)-1) PFATAL("shmat() failed");
 
 }
@@ -632,7 +632,7 @@ static void analyze(char** argv) {
     prev_s10 = sub_10;
     prev_a10 = add_10;
 
-  } 
+  }
 
   dump_hex(in_data, in_len, b_data);
 
@@ -902,7 +902,7 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
   new_argv[2] = target_path;
   new_argv[1] = "--";
 
-  tmp = getenv("AFL_PATH");
+  tmp = getenv("HF_PATH");
 
   if (tmp) {
 

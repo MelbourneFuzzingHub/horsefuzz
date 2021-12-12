@@ -49,7 +49,7 @@ static u32  cc_par_cnt = 1;         /* Param count, including argv0      */
 
 static void find_obj(u8* argv0) {
 
-  u8 *afl_path = getenv("AFL_PATH");
+  u8 *afl_path = getenv("HF_PATH");
   u8 *slash, *tmp;
 
   if (afl_path) {
@@ -89,12 +89,12 @@ static void find_obj(u8* argv0) {
 
   }
 
-  if (!access(AFL_PATH "/afl-llvm-rt.o", R_OK)) {
-    obj_path = AFL_PATH;
+  if (!access(HF_PATH "/afl-llvm-rt.o", R_OK)) {
+    obj_path = HF_PATH;
     return;
   }
 
-  FATAL("Unable to find 'afl-llvm-rt.o' or 'afl-llvm-pass.so'. Please set AFL_PATH");
+  FATAL("Unable to find 'afl-llvm-rt.o' or 'afl-llvm-pass.so'. Please set HF_PATH");
 
 }
 
@@ -111,7 +111,7 @@ static void edit_params(u32 argc, char** argv) {
   name = strrchr(argv[0], '/');
   if (!name) name = argv[0]; else name++;
 
-  if (!strcmp(name, "afl-clang-fast++")) {
+  if (!strcmp(name, "horsefuzz-clang-fast++")) {
     u8* alt_cxx = getenv("AFL_CXX");
     cc_params[0] = alt_cxx ? alt_cxx : (u8*)"clang++";
   } else {
@@ -315,9 +315,9 @@ int main(int argc, char** argv) {
   if (isatty(2) && !getenv("AFL_QUIET")) {
 
 #ifdef USE_TRACE_PC
-    SAYF(cCYA "afl-clang-fast [tpcg] " cBRI VERSION  cRST " by <lszekeres@google.com>\n");
+    SAYF(cCYA "horsefuzz-clang-fast [tpcg] HorseFuzz " cBRI VERSION  cRST " by <lszekeres@google.com>\n");
 #else
-    SAYF(cCYA "afl-clang-fast " cBRI VERSION  cRST " by <lszekeres@google.com>\n");
+    SAYF(cCYA "horsefuzz-clang-fast HorseFuzz " cBRI VERSION  cRST " by <lszekeres@google.com>\n");
 #endif /* ^USE_TRACE_PC */
 
   }
@@ -329,10 +329,10 @@ int main(int argc, char** argv) {
          "for clang, letting you recompile third-party code with the required runtime\n"
          "instrumentation. A common use pattern would be one of the following:\n\n"
 
-         "  CC=%s/afl-clang-fast ./configure\n"
-         "  CXX=%s/afl-clang-fast++ ./configure\n\n"
+         "  CC=%s/horsefuzz-clang-fast ./configure\n"
+         "  CXX=%s/horsefuzz-clang-fast++ ./configure\n\n"
 
-         "In contrast to the traditional afl-clang tool, this version is implemented as\n"
+         "In contrast to the traditional horsefuzz-clang tool, this version is implemented as\n"
          "an LLVM pass and tends to offer improved performance with slow programs.\n\n"
 
          "You can specify custom next-stage toolchain via AFL_CC and AFL_CXX. Setting\n"

@@ -35,7 +35,11 @@
 #include "types.h"
 #include "debug.h"
 #include "alloc-inl.h"
+// HorseFuzz
 #include "hash.h"
+#include "utils.h"
+#include "hashset.h"
+#include <inttypes.h>
 
 #include <stdio.h>
 #include <unistd.h>
@@ -46,6 +50,7 @@
 #include <signal.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <assert.h>
 
 #include <sys/wait.h>
 #include <sys/time.h>
@@ -57,6 +62,14 @@
 static s32 child_pid;                 /* PID of the tested program         */
 
 static u8* trace_bits;                /* SHM with instrumentation bitmap   */
+// HorseFuzz
+static u32* funcids_bits;             /* SHM with function bitmap          */
+static u32* fids;                     /* Functions ID                      */
+static char** funcs;                  /* Functions name                    */
+static int funcs_len = 0;
+static u32* task;
+static u8 para_mode;
+static u8* task_file;
 
 static u8 *out_file,                  /* Trace output file                 */
           *doc_path,                  /* Path to docs                      */
@@ -111,6 +124,7 @@ static const u8 count_class_binary[256] = {
 
 };
 
+
 static void classify_counts(u8* mem, const u8* map) {
 
   u32 i = MAP_SIZE;
@@ -149,7 +163,8 @@ static void setup_shm(void) {
 
   u8* shm_str;
 
-  shm_id = shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
+  // HorseFuzz: increase shared memory size for function ids
+  shm_id = shmget(IPC_PRIVATE, MAP_SIZE + MAP_SIZE*sizeof(u32), IPC_CREAT | IPC_EXCL | 0600);
 
   if (shm_id < 0) PFATAL("shmget() failed");
 
@@ -162,9 +177,13 @@ static void setup_shm(void) {
   ck_free(shm_str);
 
   trace_bits = shmat(shm_id, NULL, 0);
-  
+
   if (trace_bits == (void *)-1) PFATAL("shmat() failed");
 
+  // HorseFuzz: initialize funcids_bit[]
+  funcids_bits = (u32 *)(trace_bits + MAP_SIZE);
+  for (int i = 0; i < MAP_SIZE; i++)
+    funcids_bits[i] = 0;
 }
 
 /* Write results. */
@@ -198,9 +217,15 @@ static u32 write_results(void) {
 
   if (binary_mode) {
 
-    for (i = 0; i < MAP_SIZE; i++)
-      if (trace_bits[i]) ret++;
-    
+    for (i = 0; i < MAP_SIZE; i++) {
+      // HorseFuzz
+      int fid = funcids_bits[i];
+      if (trace_bits[i] &&
+        (!para_mode || (para_mode && found(task, fid, MAX_TASK_LEN) >= 0))) ret++;
+      // if (trace_bits[i]) ret++;
+    }
+
+
     ck_write(fd, trace_bits, MAP_SIZE, out_file);
     close(fd);
 
@@ -212,8 +237,11 @@ static u32 write_results(void) {
 
     for (i = 0; i < MAP_SIZE; i++) {
 
+      // HorseFuzz: update nunmber of tuples
+      int fid = funcids_bits[i];
       if (!trace_bits[i]) continue;
-      ret++;
+      else if (para_mode && found(task, fid, MAX_TASK_LEN) < 0) continue;
+      else ret++;
 
       if (cmin_mode) {
 
@@ -222,10 +250,14 @@ static u32 write_results(void) {
 
         fprintf(f, "%u%u\n", trace_bits[i], i);
 
-      } else fprintf(f, "%06u:%u\n", i, trace_bits[i]);
+      } else { // HorseFuzz: print more functions info to output file
+        int idx = found(fids, funcids_bits[i], MAX_FUNCS);
+        if (idx >= 0)
+          fprintf(f, "%06u:%u:%s:%u\n", i, trace_bits[i], funcs[idx], funcids_bits[i]);
+      }
 
     }
-  
+
     fclose(f);
 
   }
@@ -469,7 +501,7 @@ static void detect_file_args(char** argv) {
 
 static void show_banner(void) {
 
-  SAYF(cCYA "afl-showmap " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
+  SAYF(cCYA "afl-showmap HorseFuzz " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
 
 }
 
@@ -495,7 +527,8 @@ static void usage(u8* argv0) {
 
        "  -q            - sink program's output and don't show messages\n"
        "  -e            - show edge coverage only, ignore hit counts\n"
-       "  -c            - allow core dumps\n\n"
+       "  -c            - allow core dumps\n"
+       "  -p file       - [HorseFuzz] parallel mode with assigned task\n\n" // HorseFuzz
 
        "This tool displays raw tuple data captured by AFL instrumentation.\n"
        "For additional help, consult %s/README.\n\n" cRST,
@@ -578,7 +611,7 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
 
   /* Now we need to actually find qemu for argv[0]. */
 
-  tmp = getenv("AFL_PATH");
+  tmp = getenv("HF_PATH");
 
   if (tmp) {
 
@@ -623,6 +656,72 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
 }
 
 
+// HorseFuzz: read and parse functions from file
+void parse_functions() {
+  funcs = (char **) ck_alloc(sizeof(char *) * MAX_FUNCS);
+  for (int i = 0; i < MAX_FUNCS; i++)
+    funcs[i] = (char *) ck_alloc(MAX_FUNC_LEN * sizeof(char));
+  fids = (u32*) ck_alloc(sizeof(u32) * MAX_FUNCS);
+
+  u8* binary = getenv("HF_BINARY");
+  u8* fn_funcs = alloc_printf("/tmp/%s/func_ids.log", binary);
+  FILE *fp = fopen(fn_funcs, "r");
+  if (!fp) {
+    SAYF("Cannot open functions file!");
+    exit (0);
+  }
+  ck_free(fn_funcs);
+
+  char *line = NULL;
+  size_t len = 0, read;
+  int i = 0;
+  while ((read = getline(&line, &len, fp)) != -1) {
+    char *fname = strtok(line, " ");
+    u32 fid = (u32) strtoumax(strtok(NULL, ""), NULL, 10);
+    fids[i] = fid;
+    strcpy(funcs[i], fname);
+    // SAYF("[parse_functions] fid: %u, fname: %s\n", fid, funcs[i]);
+    i++;
+  }
+  funcs_len = i;
+  fclose(fp);
+}
+
+
+// HorseFuzz: read from file and parse assigned functions' names for an instance
+u32* parse_task(u8* file, char** funcs, u32* fids, u32 funcs_len) {
+  u32* task = (u32 *) ck_alloc(sizeof(u32) * MAX_TASK_LEN);
+  memset(task, 0, sizeof(u32) * MAX_TASK_LEN);
+  FILE *fp = fopen(file, "r");
+  if (!fp) {
+    // FATAL("Cannot open task file!");
+    exit (0);
+  }
+  char *line = NULL;
+  size_t len = 0, read;
+  int j = 0;
+  while ((read = getline(&line, &len, fp)) != -1) {
+    int found = 0;
+    size_t ln = strlen(line) - 1;
+    if (*line && line[ln] == '\n')
+      line[ln] = '\0';
+    char *fname = strtok(line, "");
+    for (int i = 0; i < funcs_len; i++) {
+      if (!strcmp(fname, funcs[i])) {
+        task[j] = fids[i];
+        SAYF("Task function %s with id %u\n", fname, fids[i]);
+        found = 1;
+        break;
+      }
+    }
+    if (found) j++;
+    // else FATAL("Cannot find %s in the program's functions\n", fname);
+  }
+  fclose(fp);
+  return task;
+}
+
+
 /* Main entry point */
 
 int main(int argc, char** argv) {
@@ -634,7 +733,7 @@ int main(int argc, char** argv) {
 
   doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;
 
-  while ((opt = getopt(argc,argv,"+o:m:t:A:eqZQbc")) > 0)
+  while ((opt = getopt(argc,argv,"+o:p:m:t:A:eqZQbc")) > 0)
 
     switch (opt) {
 
@@ -745,6 +844,13 @@ int main(int argc, char** argv) {
         keep_cores = 1;
         break;
 
+      case 'p': // HorseFuzz
+
+        para_mode = 1;
+        if (task_file) FATAL("Multiple -p options not supported");
+        task_file = optarg;
+        break;
+
       default:
 
         usage(argv[0]);
@@ -755,6 +861,11 @@ int main(int argc, char** argv) {
 
   setup_shm();
   setup_signal_handlers();
+
+  // HorseFuzz
+  parse_functions();
+  if (para_mode)
+    task = parse_task(task_file, funcs, fids, funcs_len);
 
   set_up_environment();
 
@@ -782,6 +893,10 @@ int main(int argc, char** argv) {
     OKF("Captured %u tuples in '%s'." cRST, tcnt, out_file);
 
   }
+
+  // HorseFuzz
+  ck_free(funcs);
+  ck_free(task);
 
   exit(child_crashed * 2 + child_timed_out);
 

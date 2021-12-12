@@ -101,7 +101,7 @@
 #define HAVOC_MIN           16
 
 /* Maximum stacking for havoc-stage tweaks. The actual value is calculated
-   like this: 
+   like this:
 
    n = random between 1 and HAVOC_STACK_POW2
    stacking = 2^n
@@ -358,5 +358,10 @@
    measuring coverage that could be attained by a "dumb" fuzzing algorithm: */
 
 // #define IGNORE_FINDS
+
+// HorseFuzz
+#define MAX_FUNCS         5000
+#define MAX_FUNC_LEN      100
+#define MAX_TASK_LEN      5000
 
 #endif /* ! _HAVE_CONFIG_H */

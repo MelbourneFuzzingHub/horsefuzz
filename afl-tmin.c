@@ -191,7 +191,7 @@ static void setup_shm(void) {
   ck_free(shm_str);
 
   trace_bits = shmat(shm_id, NULL, 0);
-  
+
   if (trace_bits == (void *)-1) PFATAL("shmat() failed");
 
 }
@@ -400,7 +400,7 @@ static u8 run_target(char** argv, u8* mem, u32 len, u8 first_run) {
   if (first_run) orig_cksum = cksum;
 
   if (orig_cksum == cksum) return 1;
-  
+
   missed_paths++;
   return 0;
 
@@ -454,7 +454,7 @@ static void minimize(char** argv) {
 
       memcpy(tmp_buf, in_data, in_len);
       memset(tmp_buf + set_pos, '0', use_len);
-  
+
       res = run_target(argv, tmp_buf, in_len, 0);
 
       if (res) {
@@ -584,7 +584,7 @@ next_del_blksize:
     memcpy(tmp_buf, in_data, in_len);
 
     for (r = 0; r < in_len; r++)
-      if (tmp_buf[r] == i) tmp_buf[r] = '0'; 
+      if (tmp_buf[r] == i) tmp_buf[r] = '0';
 
     res = run_target(argv, tmp_buf, in_len, 0);
 
@@ -913,7 +913,7 @@ static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
   new_argv[2] = target_path;
   new_argv[1] = "--";
 
-  tmp = getenv("AFL_PATH");
+  tmp = getenv("HF_PATH");
 
   if (tmp) {
 
@@ -1135,7 +1135,7 @@ int main(int argc, char** argv) {
 
   if (!crash_mode) {
 
-     OKF("Program terminates normally, minimizing in " 
+     OKF("Program terminates normally, minimizing in "
          cCYA "instrumented" cRST " mode.");
 
      if (!anything_set()) FATAL("No instrumentation detected.");

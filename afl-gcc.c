@@ -28,7 +28,7 @@
 
    The wrapper needs to know the path to afl-as (renamed to 'as'). The default
    is /usr/local/lib/afl/. A convenient way to specify alternative directories
-   would be to set AFL_PATH.
+   would be to set HF_PATH.
 
    If AFL_HARDEN is set, the wrapper will compile the target app with various
    hardening options that may help detect memory management issues more
@@ -58,12 +58,12 @@ static u8   be_quiet,               /* Quiet mode                        */
             clang_mode;             /* Invoked as afl-clang*?            */
 
 
-/* Try to find our "fake" GNU assembler in AFL_PATH or at the location derived
+/* Try to find our "fake" GNU assembler in HF_PATH or at the location derived
    from argv[0]. If that fails, abort. */
 
 static void find_as(u8* argv0) {
 
-  u8 *afl_path = getenv("AFL_PATH");
+  u8 *afl_path = getenv("HF_PATH");
   u8 *slash, *tmp;
 
   if (afl_path) {
@@ -103,13 +103,13 @@ static void find_as(u8* argv0) {
 
   }
 
-  if (!access(AFL_PATH "/as", X_OK)) {
-    as_path = AFL_PATH;
+  if (!access(HF_PATH "/as", X_OK)) {
+    as_path = HF_PATH;
     return;
   }
 
-  FATAL("Unable to find AFL wrapper binary for 'as'. Please set AFL_PATH");
- 
+  FATAL("Unable to find AFL wrapper binary for 'as'. Please set HF_PATH");
+
 }
 
 
